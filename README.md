@@ -1,6 +1,6 @@
 # agrifor_app
 
-A new Flutter project.
+Agrifor project.
 
 ## Getting Started
 
