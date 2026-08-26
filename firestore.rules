@@ -1,0 +1,75 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && currentUserData().role == 'admin';
+    }
+
+    function isOwner(propertyId) {
+      return isSignedIn()
+        && currentUserData().role == 'producer'
+        && currentUserData().propertyId == propertyId;
+    }
+
+    match /categories/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /products/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /productionSystems/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /properties/{propertyId} {
+      allow read: if true;
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (
+        isOwner(propertyId) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'summary', 'productionSystem', 'association', 'salesChannels',
+          'salesNotes', 'whatsapp', 'email', 'images', 'updatedAt'
+        ])
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /users/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+
+      // auto-cadastro: o próprio usuário cria seu doc, mas SEMPRE como
+      // 'producer', sem propriedade ainda, com o email batendo com o
+      // do token (evita ele mentir o email de outra pessoa), e com um
+      // nome válido (não vazio).
+      allow create: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == 'producer'
+        && request.resource.data.propertyId == null
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.keys().hasOnly(['email', 'role', 'propertyId', 'name', 'createdAt']);
+
+      // produtor nunca edita o próprio doc depois de criado (role e
+      // propertyId só mudam via Cloud Function, que usa Admin SDK e
+      // ignora rules de qualquer forma — isso aqui bloqueia só o client).
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+  }
+}

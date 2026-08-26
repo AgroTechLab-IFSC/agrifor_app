@@ -1,1 +1,29 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"app-agrifor","appId":"1:634586034329:android:1b2a19fc2c8df789810808","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"app-agrifor","configurations":{"android":"1:634586034329:android:1b2a19fc2c8df789810808","ios":"1:634586034329:ios:7407a318b5f4c1dd810808","web":"1:634586034329:web:861652017462d4fc810808"}}}}}}
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "app-agrifor",
+          "appId": "1:634586034329:android:1b2a19fc2c8df789810808",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "app-agrifor",
+          "configurations": {
+            "android": "1:634586034329:android:1b2a19fc2c8df789810808",
+            "ios": "1:634586034329:ios:7407a318b5f4c1dd810808",
+            "web": "1:634586034329:web:861652017462d4fc810808"
+          }
+        }
+      }
+    }
+  },
+  "firestore": {
+    "database": "(default)",
+    "location": "southamerica-east1",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "seed-firestore",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Script único para popular o Firestore com o mock inicial de propriedades.",
+  "main": "seed.js",
+  "scripts": {
+    "seed": "node seed.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0"
+  }
+}

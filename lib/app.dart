@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'core/theme/app_theme.dart';
-import 'features/auth/screens/login_screen.dart';
-import 'features/auth/screens/register_screen.dart';
-import 'features/home/screens/home_screen.dart';
+import 'theme/app_theme.dart';
+import 'screens/auth/login_screen.dart';
+import 'screens/auth/register_screen.dart';
+import 'widgets/main_shell.dart';
 
 class App extends StatelessWidget {
   const App({super.key});
@@ -13,11 +13,11 @@ class App extends StatelessWidget {
       title: 'Agrifor',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
-      initialRoute: '/login',
+      initialRoute: '/home', // MainShell decide o que mostrar (visitante/produtor/admin)
       routes: {
         '/login':    (_) => const LoginScreen(),
         '/register': (_) => const RegisterScreen(),
-        '/home':     (_) => const HomeScreen(),
+        '/home':     (_) => const MainShell(),
       },
     );
   }
