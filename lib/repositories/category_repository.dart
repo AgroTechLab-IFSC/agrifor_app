@@ -29,8 +29,13 @@ class CategoryRepository {
     return CategoryModel.fromMap(doc.id, doc.data()!);
   }
 
-  Future<void> create(CategoryModel category) {
-    return _col.doc(category.id).set(category.toMap());
+  /// Id gerado pelo Firestore (doc.add) — o CategoryModel passado aqui
+  /// deve vir com id: '' (placeholder), já que toMap() não serializa
+  /// id mesmo. Quem chama precisa do retorno pra saber o id real
+  /// criado (ex: pra permitir editar/apagar em seguida na mesma sessão).
+  Future<String> create(CategoryModel category) async {
+    final ref = await _col.add(category.toMap());
+    return ref.id;
   }
 
   Future<void> update(CategoryModel category) {
@@ -39,5 +44,12 @@ class CategoryRepository {
 
   Future<void> setActive(String id, bool active) {
     return _col.doc(id).update({'active': active});
+  }
+
+  /// Exclusão definitiva. Produtos da categoria não são apagados aqui
+  /// — cascata é responsabilidade do controller, que precisa ler a
+  /// lista de produtos antes de decidir o que apagar.
+  Future<void> delete(String id) {
+    return _col.doc(id).delete();
   }
 }

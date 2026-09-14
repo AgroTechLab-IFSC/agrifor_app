@@ -90,8 +90,15 @@ class PropertiesScreen extends StatefulWidget {
 class _PropertiesScreenState extends State<PropertiesScreen> {
   final TextEditingController _searchController = TextEditingController();
 
-  // Multi-seleção de categorias. "Todos" é o estado padrão/exclusivo.
+  // Multi-seleção de categorias — usado só na visão pública/produtor
+  // (_isAdmin == false). "Todos" é o estado padrão/exclusivo.
   final Set<String> _selectedFilters = {'Todos'};
+
+  // Filtro de status — usado só na visão do admin (_isAdmin == true).
+  // Diferente de _selectedFilters: aqui é seleção única (um segmento
+  // por vez, tipo aba), não multi-seleção por categoria. Ver
+  // _onAdminStatusSelected.
+  String _adminStatusFilter = 'Todos';
 
   late final PropertyDetailResolver _resolver = PropertyDetailResolver(
     categoryRepository: widget._categoryRepository,
@@ -116,13 +123,23 @@ class _PropertiesScreenState extends State<PropertiesScreen> {
   late final Stream<List<ProductionSystemModel>> _productionSystemsStream =
       widget._productionSystemRepository.watchAll();
 
-  // Uma stream só de propriedades, criada UMA VEZ (não dentro do
-  // build/StreamBuilder) — o mesmo cuidado já tomado no form pra não
-  // recriar streams a cada rebuild. Sem distinção ativo/inativo: todo
-  // mundo (público e admin) vê a mesma lista.
-  late final Stream<List<PropertyModel>> _propertiesStream = widget
+  // Duas streams de propriedades, cada uma criada UMA VEZ (não dentro
+  // do build/StreamBuilder) — o mesmo cuidado já tomado no form pra
+  // não recriar streams a cada rebuild. Público e produtor (não-admin)
+  // veem só aprovadas; admin vê tudo, inclusive pendente/rejeitada
+  // (marcadas com selo, ver _PropertyResultTile, e filtráveis por
+  // status, ver _matchesAdminStatusFilter). Qual delas alimenta a
+  // lista é escolhido em `_propertiesStream` abaixo, conforme
+  // `_isAdmin`.
+  late final Stream<List<PropertyModel>> _allPropertiesStream = widget
       ._propertyRepository
       .watchAll();
+  late final Stream<List<PropertyModel>> _approvedPropertiesStream = widget
+      ._propertyRepository
+      .watchApproved();
+
+  Stream<List<PropertyModel>> get _propertiesStream =>
+      _isAdmin ? _allPropertiesStream : _approvedPropertiesStream;
 
   bool _resolvingDetail = false;
 
@@ -212,12 +229,29 @@ class _PropertiesScreenState extends State<PropertiesScreen> {
           productNames.any((name) => name.toLowerCase().contains(query)) ||
           categoryNames.any((name) => name.toLowerCase().contains(query));
 
-      final matchesFilter =
-          _selectedFilters.contains('Todos') ||
-          _selectedFilters.every((f) => categoryNames.contains(f));
+      // Admin filtra por status (Todos/Aprovados/Pendentes/Rejeitados,
+      // seleção única); público/produtor continuam filtrando por
+      // categoria (multi-seleção), sem alteração nenhuma nesse caso.
+      final matchesFilter = _isAdmin
+          ? _matchesAdminStatusFilter(property)
+          : (_selectedFilters.contains('Todos') ||
+                _selectedFilters.every((f) => categoryNames.contains(f)));
 
       return matchesSearch && matchesFilter;
     }).toList();
+  }
+
+  bool _matchesAdminStatusFilter(PropertyModel property) {
+    switch (_adminStatusFilter) {
+      case 'Aprovados':
+        return property.isApproved;
+      case 'Pendentes':
+        return property.isPending;
+      case 'Rejeitados':
+        return property.isRejected;
+      default: // 'Todos'
+        return true;
+    }
   }
 
   void _onFilterSelected(String filter) {
@@ -240,6 +274,13 @@ class _PropertiesScreenState extends State<PropertiesScreen> {
         _selectedFilters.add('Todos');
       }
     });
+  }
+
+  /// Seleção única (não acumula, diferente de _onFilterSelected) — o
+  /// filtro de status do admin funciona como abas, não como chips
+  /// multi-seleção.
+  void _onAdminStatusSelected(String filter) {
+    setState(() => _adminStatusFilter = filter);
   }
 
   Future<void> _openDetail(PropertyModel property) async {
@@ -292,8 +333,7 @@ class _PropertiesScreenState extends State<PropertiesScreen> {
       onlyActive: true,
     );
     final formProducts = widget._productRepository.watchAll(onlyActive: true);
-    final formProductionSystems =
-        widget._productionSystemRepository.watchAll();
+    final formProductionSystems = widget._productionSystemRepository.watchAll();
 
     showModalBottomSheet(
       context: context,
@@ -333,6 +373,77 @@ class _PropertiesScreenState extends State<PropertiesScreen> {
         },
       ),
     );
+  }
+
+  Future<void> _approve(PropertyModel property) async {
+    try {
+      await widget._propertyRepository.approve(property.id);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Erro ao aprovar: $e')));
+    }
+  }
+
+  /// Rejeitar um cadastro pendente só muda o status pra `rejected`
+  /// (PropertyRepository.reject) — ao contrário do fluxo antigo, não
+  /// apaga o documento nem desvincula o produtor: a propriedade
+  /// continua vinculada a ele, só fica fora da listagem/mapa público
+  /// (watchApproved só inclui `approved`) até o produtor revisar e
+  /// reenviar para aprovação (botão em MyPropertyScreen, que volta o
+  /// status pra `pending`).
+  Future<void> _confirmReject(PropertyModel property) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rejeitar cadastro'),
+        content: Text(
+          'Tem certeza que deseja rejeitar o cadastro de '
+          '"${property.propertyName}"? O produtor vinculado poderá revisar '
+          'e reenviá-lo para uma nova análise.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Rejeitar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await widget._propertyRepository.reject(property.id);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Erro ao rejeitar: $e')));
+    }
+  }
+
+  /// "Marcar como pendente" numa propriedade `approved` — tira-a do
+  /// ar (some da listagem/mapa público) sem excluir e sem desvincular
+  /// o produtor, mandando-a de volta pra fila de análise do admin. Só
+  /// muda o status (PropertyRepository.setPending); mesma operação de
+  /// backend usada pelo "Reenviar para aprovação" do produtor numa
+  /// rejeitada, só que disparada pelo admin numa aprovada.
+  Future<void> _markPending(PropertyModel property) async {
+    try {
+      await widget._propertyRepository.setPending(property.id);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao marcar como pendente: $e')),
+      );
+    }
   }
 
   Future<void> _confirmDelete(PropertyModel property) async {
@@ -455,7 +566,12 @@ class _PropertiesScreenState extends State<PropertiesScreen> {
                   }
                   final categories = categorySnap.data!;
                   final categoriesById = {for (final c in categories) c.id: c};
-                  final filters = ['Todos', ...categories.map((c) => c.name)];
+                  // Admin filtra por status, não por categoria (ver
+                  // _matchesAdminStatusFilter); público/produtor mantêm
+                  // os filtros de categoria de sempre, sem alteração.
+                  final filters = _isAdmin
+                      ? const ['Todos', 'Aprovados', 'Pendentes', 'Rejeitados']
+                      : ['Todos', ...categories.map((c) => c.name)];
 
                   return StreamBuilder<List<ProductModel>>(
                     stream: _productsStream,
@@ -498,8 +614,12 @@ class _PropertiesScreenState extends State<PropertiesScreen> {
                             children: [
                               _FilterChips(
                                 filters: filters,
-                                selected: _selectedFilters,
-                                onSelected: _onFilterSelected,
+                                selected: _isAdmin
+                                    ? {_adminStatusFilter}
+                                    : _selectedFilters,
+                                onSelected: _isAdmin
+                                    ? _onAdminStatusSelected
+                                    : _onFilterSelected,
                               ),
                               Expanded(
                                 child: filtered.isEmpty
@@ -518,46 +638,127 @@ class _PropertiesScreenState extends State<PropertiesScreen> {
                                             const SizedBox(height: 12),
                                         itemBuilder: (context, index) {
                                           final property = filtered[index];
+                                          final isPending = property.isPending;
+                                          final isRejected =
+                                              property.isRejected;
                                           return _PropertyResultTile(
                                             property: property,
                                             categoryNames: _categoryNamesFor(
                                               property,
                                               categoriesById,
                                             ),
+                                            // Só o admin abre pendente/
+                                            // rejeitada por aqui (não-admin
+                                            // nunca vê essas linhas na
+                                            // lista, já que
+                                            // _propertiesStream é
+                                            // watchApproved() pra ele).
+                                            pending: isPending,
+                                            rejected: isRejected,
                                             onTap: () => _openDetail(property),
-                                            adminActions: _isAdmin
+                                            adminActions: !_isAdmin
+                                                ? null
+                                                : isPending
                                                 ? [
-                                                    IconButton(
-                                                      icon: const Icon(
-                                                        Icons.edit_outlined,
-                                                        size: 20,
+                                                    _AdminActionIcon(
+                                                      icon: Icons
+                                                          .check_circle_outline,
+                                                      color: const Color(
+                                                        0xFF2E7D32,
                                                       ),
+                                                      tooltip: 'Aprovar',
+                                                      onPressed: () =>
+                                                          _approve(property),
+                                                    ),
+                                                    _AdminActionIcon(
+                                                      icon:
+                                                          Icons.cancel_outlined,
+                                                      color: Colors.red,
+                                                      tooltip: 'Rejeitar',
+                                                      onPressed: () =>
+                                                          _confirmReject(
+                                                            property,
+                                                          ),
+                                                    ),
+                                                  ]
+                                                : isRejected
+                                                ? [
+                                                    _AdminActionIcon(
+                                                      icon: Icons.edit_outlined,
+                                                      color: Colors.black54,
                                                       tooltip: 'Editar',
-                                                      padding: EdgeInsets.zero,
-                                                      constraints:
-                                                          const BoxConstraints(),
                                                       onPressed: () =>
                                                           _openForm(
                                                             property: property,
                                                           ),
                                                     ),
-                                                    IconButton(
-                                                      icon: const Icon(
-                                                        Icons.delete_outline,
-                                                        size: 20,
-                                                        color: Colors.red,
+                                                    // Rejeitada também pode
+                                                    // ser aprovada
+                                                    // diretamente pelo
+                                                    // admin, sem precisar
+                                                    // esperar o produtor
+                                                    // reenviar pra análise
+                                                    // primeiro.
+                                                    _AdminActionIcon(
+                                                      icon: Icons
+                                                          .check_circle_outline,
+                                                      color: const Color(
+                                                        0xFF2E7D32,
                                                       ),
+                                                      tooltip: 'Aprovar',
+                                                      onPressed: () =>
+                                                          _approve(property),
+                                                    ),
+                                                    _AdminActionIcon(
+                                                      icon:
+                                                          Icons.delete_outline,
+                                                      color: Colors.red,
                                                       tooltip: 'Excluir',
-                                                      padding: EdgeInsets.zero,
-                                                      constraints:
-                                                          const BoxConstraints(),
                                                       onPressed: () =>
                                                           _confirmDelete(
                                                             property,
                                                           ),
                                                     ),
                                                   ]
-                                                : null,
+                                                : [
+                                                    _AdminActionIcon(
+                                                      icon: Icons.edit_outlined,
+                                                      color: Colors.black54,
+                                                      tooltip: 'Editar',
+                                                      onPressed: () =>
+                                                          _openForm(
+                                                            property: property,
+                                                          ),
+                                                    ),
+                                                    // "Marcar como
+                                                    // pendente" só faz
+                                                    // sentido numa
+                                                    // propriedade
+                                                    // aprovada.
+                                                    _AdminActionIcon(
+                                                      icon: Icons
+                                                          .remove_circle_outline,
+                                                      color: const Color(
+                                                        0xFFFFB300,
+                                                      ),
+                                                      tooltip:
+                                                          'Marcar como pendente',
+                                                      onPressed: () =>
+                                                          _markPending(
+                                                            property,
+                                                          ),
+                                                    ),
+                                                    _AdminActionIcon(
+                                                      icon:
+                                                          Icons.delete_outline,
+                                                      color: Colors.red,
+                                                      tooltip: 'Excluir',
+                                                      onPressed: () =>
+                                                          _confirmDelete(
+                                                            property,
+                                                          ),
+                                                    ),
+                                                  ],
                                           );
                                         },
                                       ),
@@ -635,16 +836,28 @@ class _PropertyResultTile extends StatelessWidget {
     required this.categoryNames,
     required this.onTap,
     this.adminActions,
+    this.pending = false,
+    this.rejected = false,
   });
 
   final PropertyModel property;
   final List<String> categoryNames;
   final VoidCallback onTap;
 
-  /// Ações extras (editar, excluir) empilhadas verticalmente no canto
-  /// direito do card. Só aparece quando não-nulo — decidido pela tela
-  /// (quem está logado), não por uma flag interna deste widget.
+  /// Ações extras (editar, excluir OU aprovar, rejeitar) empilhadas
+  /// verticalmente no canto direito do card. Só aparece quando
+  /// não-nulo — decidido pela tela (quem está logado), não por uma
+  /// flag interna deste widget.
   final List<Widget>? adminActions;
+
+  /// Só pode ser true numa lista vista pelo admin (_propertiesStream
+  /// só inclui pendente/rejeitada pra ele) — mostra o selo "PENDENTE"
+  /// ao lado do nome.
+  final bool pending;
+
+  /// Mesma ideia de [pending], mas pro selo "REJEITADO" — os dois
+  /// nunca são true ao mesmo tempo (são status mutuamente exclusivos).
+  final bool rejected;
 
   @override
   Widget build(BuildContext context) {
@@ -681,13 +894,63 @@ class _PropertyResultTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    property.propertyName,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
-                      color: Color(0xFF1B5E20),
-                    ),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          property.propertyName,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                            color: Color(0xFF1B5E20),
+                          ),
+                        ),
+                      ),
+                      if (pending) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF3E0),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFFFFB74D)),
+                          ),
+                          child: const Text(
+                            'PENDENTE',
+                            style: TextStyle(
+                              color: Color(0xFFE65100),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (rejected) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFEBEE),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFFEF9A9A)),
+                          ),
+                          child: const Text(
+                            'REJEITADO',
+                            style: TextStyle(
+                              color: Color(0xFFC62828),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   if (categoryNames.isNotEmpty) ...[
                     const SizedBox(height: 8),
@@ -722,18 +985,18 @@ class _PropertyResultTile extends StatelessWidget {
             if (adminActions != null)
               // Empilhados (editar em cima, excluir embaixo) em vez de
               // lado a lado — ocupa bem menos largura no card, que já
-              // divide espaço com a imagem e o texto.
+              // divide espaço com a imagem e o texto. Espaçamento
+              // entre eles é só um SizedBox pequeno (não Padding em
+              // cada item), pra não somar folga extra nas pontas.
               Column(
                 mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: adminActions!
-                    .map(
-                      (action) => Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: action,
-                      ),
-                    )
-                    .toList(),
+                children: [
+                  for (var i = 0; i < adminActions!.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 4),
+                    adminActions![i],
+                  ],
+                ],
               )
             else
               const Icon(Icons.chevron_right, color: Colors.black26),
@@ -752,6 +1015,47 @@ class _CenteredMessage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Text(message, style: const TextStyle(color: Colors.black45)),
+    );
+  }
+}
+
+/// Ícone de ação do admin (aprovar/rejeitar/editar/marcar como
+/// pendente/excluir), usado nas linhas da lista. Substitui o antigo
+/// `IconButton` — mesmo com `padding: EdgeInsets.zero` e
+/// `constraints: BoxConstraints()`, o `IconButton` do Material ainda
+/// reserva uma área de toque mínima interna que não é totalmente
+/// zerada por esses parâmetros, e empilhados (até 3 numa propriedade
+/// aprovada: editar, marcar pendente, excluir) isso deixava o card
+/// alto demais verticalmente. Aqui o tamanho do widget é só o do
+/// ícone + um respiro pequeno — sem mínimo escondido.
+class _AdminActionIcon extends StatelessWidget {
+  const _AdminActionIcon({
+    required this.icon,
+    required this.color,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: onPressed,
+          child: Padding(
+            padding: const EdgeInsets.all(4),
+            child: Icon(icon, size: 21, color: color),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -15,8 +15,12 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   late final PropertyRepository _repository =
       PropertyRepository(FirebaseFirestore.instance);
+  // Mapa é tela pública: propriedade pendente de aprovação nunca
+  // aparece aqui, nem pro admin (admin não usa o mapa como home — ver
+  // main_shell.dart _AdminShell — e mesmo que usasse, a regra seria a
+  // mesma pra todo mundo).
   late final Stream<List<PropertyModel>> _propertiesStream =
-      _repository.watchAll();
+      _repository.watchApproved();
 
   @override
   Widget build(BuildContext context) {

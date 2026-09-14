@@ -8,6 +8,7 @@ import 'package:agrifor_app/repositories/category_repository.dart';
 import 'package:agrifor_app/repositories/product_repository.dart';
 import 'package:agrifor_app/repositories/production_system_repository.dart';
 import 'package:agrifor_app/repositories/property_detail_resolver.dart';
+import 'package:agrifor_app/repositories/user_repository.dart';
 import 'package:agrifor_app/services/producer_service.dart';
 import 'package:agrifor_app/screens/property/property_detail_screen.dart';
 import 'package:agrifor_app/screens/admin/widgets/property_form_sheet.dart';
@@ -22,6 +23,15 @@ import 'package:agrifor_app/screens/admin/widgets/property_form_sheet.dart';
 /// (produtor não muda vínculo de outros produtores, ver
 /// readOnlyProducers) e salvando via updateOwnEditableFields em vez de
 /// updateFull.
+///
+/// Quando o produtor ainda não tem propriedade nenhuma, mostra um
+/// botão de autocadastro em vez da mensagem "fale com um
+/// administrador" — abre o mesmo PropertyFormSheet, mas salvando via
+/// ProducerService.createPropertyForProducer, que já cria a
+/// propriedade vinculada ao próprio criador e sempre como `pending`
+/// (ver comentário lá). Assim que salva, watchByOwner já pega o novo
+/// doc e PropertyDetailScreen mostra o aviso de pendência sozinho
+/// (baseado em property.isPending), sem precisar de estado extra aqui.
 class MyPropertyScreen extends StatefulWidget {
   const MyPropertyScreen({
     super.key,
@@ -29,6 +39,7 @@ class MyPropertyScreen extends StatefulWidget {
     this.categoryRepository,
     this.productRepository,
     this.productionSystemRepository,
+    this.userRepository,
     this.producerService,
   });
 
@@ -36,6 +47,7 @@ class MyPropertyScreen extends StatefulWidget {
   final CategoryRepository? categoryRepository;
   final ProductRepository? productRepository;
   final ProductionSystemRepository? productionSystemRepository;
+  final UserRepository? userRepository;
   final ProducerService? producerService;
 
   @override
@@ -51,6 +63,8 @@ class _MyPropertyScreenState extends State<MyPropertyScreen> {
       widget.productRepository ?? ProductRepository(FirebaseFirestore.instance);
   late final _productionSystemRepository = widget.productionSystemRepository ??
       ProductionSystemRepository(FirebaseFirestore.instance);
+  late final _userRepository =
+      widget.userRepository ?? UserRepository(FirebaseFirestore.instance);
   late final _producerService =
       widget.producerService ?? ProducerService(FirebaseFirestore.instance);
 
@@ -59,6 +73,8 @@ class _MyPropertyScreenState extends State<MyPropertyScreen> {
     productRepository: _productRepository,
     productionSystemRepository: _productionSystemRepository,
   );
+
+  bool _creating = false;
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
@@ -90,15 +106,35 @@ class _MyPropertyScreenState extends State<MyPropertyScreen> {
 
         final property = snapshot.data;
         if (property == null) {
-          return const Scaffold(
+          return Scaffold(
             body: Center(
               child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  'Você ainda não está vinculado a nenhuma propriedade.\n'
-                  'Fale com um administrador.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.black54),
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.agriculture_outlined,
+                      size: 48,
+                      color: Colors.black26,
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Você ainda não está vinculado a nenhuma propriedade.\n'
+                      'Cadastre a sua ou fale com um administrador.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.black54),
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton.icon(
+                      onPressed: _creating ? null : () => _openCreateSheet(context, uid),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF2E7D32),
+                      ),
+                      icon: const Icon(Icons.add),
+                      label: const Text('Cadastrar minha propriedade'),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -127,11 +163,63 @@ class _MyPropertyScreenState extends State<MyPropertyScreen> {
               data: data,
               showBackButton: false,
               onEdit: () => _openEditSheet(context, data),
+              onResubmit: data.property.isRejected
+                  ? () => _resubmit(context, data.property)
+                  : null,
             );
           },
         );
       },
     );
+  }
+
+  Future<void> _openCreateSheet(BuildContext context, String uid) async {
+    setState(() => _creating = true);
+
+    final categories = await _categoryRepository.watchAll(onlyActive: true).first;
+    final products = await _productRepository.watchAll(onlyActive: true).first;
+    final productionSystems = await _productionSystemRepository.watchAll().first;
+    final appUser = await _userRepository.getById(uid);
+
+    if (!mounted) return;
+    setState(() => _creating = false);
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      builder: (_) => PropertyFormSheet(
+        categories: categories,
+        products: products,
+        productionSystems: productionSystems,
+        // Mesma razão do _openEditSheet: produtor não escolhe outros
+        // donos por aqui, então um stream vazio é suficiente.
+        availableProducers: const Stream.empty(),
+        producerService: _producerService,
+        readOnlyProducers: true,
+        selfOwnerName: appUser?.name,
+        onSave: (p) => _producerService.createPropertyForProducer(
+          producerUid: uid,
+          property: p,
+        ),
+      ),
+    );
+  }
+
+  /// "Submeter novamente" — devolve uma propriedade `rejected` pro
+  /// estado `pending`, fazendo-a voltar pra fila de análise do admin
+  /// (ver PropertyRepository.setPending). Não pede confirmação: é uma
+  /// ação reversível do ponto de vista do produtor (a propriedade
+  /// continua com ele e pode ser rejeitada de novo, se for o caso).
+  Future<void> _resubmit(BuildContext context, PropertyModel property) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _propertyRepository.setPending(property.id);
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Erro ao submeter novamente: $e')),
+      );
+    }
   }
 
   Future<void> _openEditSheet(

@@ -16,6 +16,7 @@ class PropertyDetailScreen extends StatelessWidget {
     required this.data,
     this.showBackButton = true,
     this.onEdit,
+    this.onResubmit,
   });
 
   final PropertyDetailViewData data;
@@ -30,6 +31,12 @@ class PropertyDetailScreen extends StatelessWidget {
   /// visão do produtor na própria propriedade; admin continua editando
   /// pela lista (PropertiesScreen), não por aqui.
   final VoidCallback? onEdit;
+
+  /// Quando não-nulo e a propriedade estiver `rejected`, mostra o
+  /// botão "Submeter novamente" dentro do aviso de rejeição. Só
+  /// MyPropertyScreen passa isso (mesmo padrão de [onEdit]) — é uma
+  /// ação exclusiva do produtor dono, admin não reenvia pelo detalhe.
+  final VoidCallback? onResubmit;
 
   Future<void> _launchUrl(String url) async {
     final uri = Uri.parse(url);
@@ -96,8 +103,10 @@ class PropertyDetailScreen extends StatelessWidget {
                     right: 24,
                     bottom: 14,
                     child: Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.black.withValues(alpha: 0.32),
                         borderRadius: BorderRadius.circular(20),
@@ -122,6 +131,98 @@ class PropertyDetailScreen extends StatelessWidget {
             padding: const EdgeInsets.all(20),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
+                // AVISO DE PENDÊNCIA — só aparece pra quem consegue
+                // abrir uma propriedade pendente (o próprio criador,
+                // via MyPropertyScreen, ou o admin, via PropertiesScreen).
+                // Público/mapa nunca chegam aqui: watchApproved() já
+                // filtra pendente antes de qualquer resolve() rodar.
+                if (property.isPending) ...[
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF8E1),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFFFE082)),
+                    ),
+                    child: const Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.hourglass_top, color: Color(0xFFF9A825)),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Seu cadastro está aguardando aprovação. Assim que for aprovado, '
+                            'a propriedade ficará visível ao público.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF5D4037),
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
+                // AVISO DE REJEIÇÃO — mesmo público-alvo do aviso de
+                // pendência acima (dono e admin; watchApproved() também
+                // já filtra `rejected` antes de qualquer resolve()).
+                // Quando quem abriu a tela passou onResubmit (só
+                // MyPropertyScreen passa), mostra o botão "Submeter
+                // novamente" dentro do próprio aviso.
+                if (property.isRejected) ...[
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFEBEE),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFEF9A9A)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.cancel_outlined,
+                              color: Color(0xFFC62828),
+                            ),
+                            SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Seu cadastro não foi aprovado. Revise as informações da propriedade '
+                                'e envie novamente para análise.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Color(0xFFB71C1C),
+                                  height: 1.4,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (onResubmit != null) ...[
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              onPressed: onResubmit,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFFC62828),
+                              ),
+                              icon: const Icon(Icons.send_outlined, size: 18),
+                              label: const Text('Submeter novamente'),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
 
                 // RESUMO
                 if (property.summary.isNotEmpty) ...[
@@ -130,7 +231,11 @@ class PropertyDetailScreen extends StatelessWidget {
                     icon: Icons.info_outline,
                     child: Text(
                       property.summary,
-                      style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Colors.black87,
+                        height: 1.4,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -185,7 +290,8 @@ class PropertyDetailScreen extends StatelessWidget {
                           icon: Icons.phone_outlined,
                           color: const Color(0xFF25D366),
                           label: 'WhatsApp',
-                          onTap: () => _launchUrl('https://wa.me/${property.whatsapp}'),
+                          onTap: () =>
+                              _launchUrl('https://wa.me/${property.whatsapp}'),
                         )
                       : const Text(
                           'Nenhum contato informado.',
@@ -272,7 +378,9 @@ class _PropertyImageCarouselState extends State<_PropertyImageCarousel> {
           onPageChanged: (index) => setState(() => _currentPage = index),
           itemBuilder: (context, index) {
             return Container(
-              color: index.isEven ? const Color(0xFF2E7D32) : const Color(0xFF1B5E20),
+              color: index.isEven
+                  ? const Color(0xFF2E7D32)
+                  : const Color(0xFF1B5E20),
               alignment: Alignment.center,
               child: const Icon(
                 Icons.image_outlined,
@@ -314,7 +422,11 @@ class _SectionCard extends StatelessWidget {
   final IconData icon;
   final Widget child;
 
-  const _SectionCard({required this.title, required this.icon, required this.child});
+  const _SectionCard({
+    required this.title,
+    required this.icon,
+    required this.child,
+  });
 
   @override
   Widget build(BuildContext context) {

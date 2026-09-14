@@ -27,8 +27,11 @@ class ProductRepository {
             snap.docs.map((d) => ProductModel.fromMap(d.id, d.data())).toList());
   }
 
-  Future<void> create(ProductModel product) {
-    return _col.doc(product.id).set(product.toMap());
+  /// Id gerado pelo Firestore (doc.add) — mesma lógica do
+  /// CategoryRepository.create (ver comentário lá).
+  Future<String> create(ProductModel product) async {
+    final ref = await _col.add(product.toMap());
+    return ref.id;
   }
 
   Future<void> update(ProductModel product) {
@@ -37,5 +40,10 @@ class ProductRepository {
 
   Future<void> setActive(String id, bool active) {
     return _col.doc(id).update({'active': active});
+  }
+
+  /// Exclusão definitiva.
+  Future<void> delete(String id) {
+    return _col.doc(id).delete();
   }
 }

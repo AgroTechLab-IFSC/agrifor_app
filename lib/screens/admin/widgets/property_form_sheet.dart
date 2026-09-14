@@ -42,6 +42,7 @@ class PropertyFormSheet extends StatefulWidget {
     required this.availableProducers,
     required this.producerService,
     this.readOnlyProducers = false,
+    this.selfOwnerName,
     required this.onSave,
   });
 
@@ -73,6 +74,15 @@ class PropertyFormSheet extends StatefulWidget {
   /// "Produtor(es)" fica só-leitura (mostra property.ownerNames) e o
   /// submit não dispara link/unlink nenhum.
   final bool readOnlyProducers;
+
+  /// Nome a mostrar na seção "Produtor(es)" (somente leitura) quando
+  /// [readOnlyProducers] é true e ainda não existe [property] (fluxo
+  /// de autocadastro pela MyPropertyScreen — o próprio usuário logado
+  /// vai virar dono assim que salvar, mas isso só acontece de fato
+  /// dentro de ProducerService.createPropertyForProducer). Ignorado
+  /// quando [property] já existe, caso em que property.ownerNames
+  /// manda. Puramente cosmético — não afeta o que é salvo.
+  final String? selfOwnerName;
 
   /// Deve retornar o id da propriedade salva (create já devolve String;
   /// em update, devolver property.id depois do await).
@@ -197,6 +207,14 @@ class _PropertyFormSheetState extends State<PropertyFormSheet> {
       whatsapp: _contactController.text.trim(),
       location: _location,
       images: widget.property?.images ?? const [],
+      // Cadastro novo pelo admin (readOnlyProducers == false) já nasce
+      // aprovado — só o autocadastro do produtor (ProducerService.
+      // createPropertyForProducer) força 'pending', e ele ignora esse
+      // valor de qualquer forma (regrava por cima dentro da
+      // transação). Em edição, mantém o status atual — este form
+      // nunca aprova/rejeita, isso é ação exclusiva do admin na lista
+      // (ver PropertiesScreen).
+      status: widget.property?.status ?? PropertyStatus.approved,
       createdAt: widget.property?.createdAt,
     );
 
@@ -332,7 +350,9 @@ class _PropertyFormSheetState extends State<PropertyFormSheet> {
                 const SizedBox(height: 4),
                 if (widget.readOnlyProducers)
                   _ReadOnlyProducersView(
-                    names: widget.property?.ownerNames ?? const [],
+                    names: widget.property != null
+                        ? widget.property!.ownerNames
+                        : [if (widget.selfOwnerName != null) widget.selfOwnerName!],
                   )
                 else
                   StreamBuilder<List<AppUserModel>>(

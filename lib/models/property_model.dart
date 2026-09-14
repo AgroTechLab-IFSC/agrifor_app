@@ -1,5 +1,25 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+/// Estado de aprovação de uma propriedade. `pending` existe tanto pro
+/// autocadastro do produtor (ver ProducerService.
+/// createPropertyForProducer) quanto pra propriedade `rejected` que o
+/// produtor decidiu reenviar pra análise (ver PropertyRepository.
+/// setPending, chamado tanto pelo admin — "marcar como pendente" numa
+/// aprovada — quanto pelo produtor — "submeter novamente" numa
+/// rejeitada). `rejected` só é alcançado a partir de `pending`, via
+/// PropertyRepository.reject (admin). Cadastro feito pelo admin
+/// (PropertyRepository.create, via PropertyFormSheet) já nasce
+/// `approved`. Docs antigos, gravados antes desse campo existir, não
+/// têm `status` no Firestore — tratados como `approved` (ver
+/// propertyStatusFromString), então nenhuma migração é necessária.
+enum PropertyStatus { pending, approved, rejected }
+
+PropertyStatus propertyStatusFromString(String? value) {
+  if (value == 'pending') return PropertyStatus.pending;
+  if (value == 'rejected') return PropertyStatus.rejected;
+  return PropertyStatus.approved;
+}
+
 class PropertyModel {
   final String id;
   final String propertyName;
@@ -14,6 +34,7 @@ class PropertyModel {
   final String whatsapp;
   final GeoPoint? location;
   final List<String> images;
+  final PropertyStatus status;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -31,6 +52,7 @@ class PropertyModel {
     this.whatsapp = '',
     this.location,
     this.images = const [],
+    this.status = PropertyStatus.approved,
     this.createdAt,
     this.updatedAt,
   });
@@ -38,6 +60,12 @@ class PropertyModel {
   bool get hasOwner => ownerIds.isNotEmpty;
 
   bool isOwnedBy(String uid) => ownerIds.contains(uid);
+
+  bool get isApproved => status == PropertyStatus.approved;
+
+  bool get isPending => status == PropertyStatus.pending;
+
+  bool get isRejected => status == PropertyStatus.rejected;
 
   factory PropertyModel.fromMap(String id, Map<String, dynamic> map) {
     return PropertyModel(
@@ -54,6 +82,7 @@ class PropertyModel {
       whatsapp: map['whatsapp'] as String? ?? '',
       location: map['location'] as GeoPoint?,
       images: List<String>.from(map['images'] ?? const []),
+      status: propertyStatusFromString(map['status'] as String?),
       createdAt: (map['createdAt'] as Timestamp?)?.toDate(),
       updatedAt: (map['updatedAt'] as Timestamp?)?.toDate(),
     );
@@ -72,13 +101,18 @@ class PropertyModel {
         'whatsapp': whatsapp,
         'location': location,
         'images': images,
+        'status': status.name,
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
   /// Campos que um PRODUTOR pode alterar na própria propriedade — tudo
-  /// exceto ownerIds/ownerNames, que só mudam via ProducerService
-  /// (link/unlink), nunca direto pelo PropertyFormSheet. Usado por
-  /// PropertyRepository.updateOwnEditableFields.
+  /// exceto ownerIds/ownerNames (só mudam via ProducerService, nunca
+  /// direto pelo PropertyFormSheet) e `status` (só muda via
+  /// PropertyRepository.approve, chamado pelo admin — ver
+  /// PropertiesScreen). Omitir `status` aqui é o que garante que um
+  /// produtor editando os próprios dados (summary, categorias, etc)
+  /// nunca consegue, nem sem querer, tornar a própria propriedade
+  /// pública. Usado por PropertyRepository.updateOwnEditableFields.
   Map<String, dynamic> toEditableMap() => {
         'propertyName': propertyName,
         'categoryIds': categoryIds,
@@ -119,6 +153,7 @@ class PropertyModel {
       whatsapp: whatsapp ?? this.whatsapp,
       location: location ?? this.location,
       images: images ?? this.images,
+      status: status,
       createdAt: createdAt,
       updatedAt: updatedAt,
     );

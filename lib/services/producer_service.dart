@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:agrifor_app/models/property_model.dart';
 
 /// Ações que cruzam mais de UMA coleção (users + properties) e por isso
 /// não pertencem a nenhum Repository específico — ver comentário em
@@ -6,6 +7,70 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 class ProducerService {
   ProducerService(this._db);
   final FirebaseFirestore _db;
+
+  /// Autocadastro: um produtor logado cria a PRÓPRIA propriedade pela
+  /// aba "Minha Propriedade" (sem passar pelo admin). Cria o documento
+  /// em properties/ e já vincula os dois lados da relação (o mesmo par
+  /// de gravações de [linkProducerToProperty]) numa única transação:
+  ///   - properties/{novoId} = dados do formulário + ownerIds/ownerNames
+  ///     com o próprio criador + status SEMPRE 'pending'
+  ///   - users/{producerUid}.propertyId = novoId
+  ///
+  /// `status` é forçado como 'pending' aqui dentro, ignorando qualquer
+  /// valor vindo em [property] — é essa trava (mais a que as Firestore
+  /// rules devem reforçar do lado do servidor) que garante que o
+  /// produtor nunca consegue publicar a própria propriedade sozinho.
+  /// Fica visível pra ELE imediatamente (MyPropertyScreen busca por
+  /// ownerIds, sem filtrar por status), só não aparece pra mais
+  /// ninguém até o admin aprovar (ver PropertyRepository.watchApproved
+  /// e PropertyRepository.approve).
+  ///
+  /// Mesma restrição de [linkProducerToProperty]: produtor só pode
+  /// estar vinculado a UMA propriedade por vez. Lança Exception com
+  /// mensagem amigável se ele já tiver propertyId.
+  Future<String> createPropertyForProducer({
+    required String producerUid,
+    required PropertyModel property,
+  }) async {
+    final userRef = _db.collection('users').doc(producerUid);
+    // Id gerado localmente ANTES da transação — precisamos dele tanto
+    // pra gravar properties/{id} quanto pra apontar users.propertyId
+    // pro mesmo doc, e uma transação não permite usar o id de um
+    // `add()` feito dentro dela.
+    final propertyRef = _db.collection('properties').doc();
+
+    await _db.runTransaction((tx) async {
+      final userSnap = await tx.get(userRef);
+
+      if (!userSnap.exists) {
+        throw Exception('Produtor não encontrado.');
+      }
+
+      final userData = userSnap.data()!;
+
+      if (userData['role'] != 'producer') {
+        throw Exception('Apenas produtores podem cadastrar uma propriedade.');
+      }
+
+      if (userData['propertyId'] != null) {
+        throw Exception('Você já está vinculado a uma propriedade.');
+      }
+
+      final producerName = userData['name'] as String? ?? 'Produtor';
+
+      tx.set(propertyRef, {
+        ...property.toMap(),
+        'ownerIds': [producerUid],
+        'ownerNames': [producerName],
+        'status': PropertyStatus.pending.name,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      tx.update(userRef, {'propertyId': propertyRef.id});
+    });
+
+    return propertyRef.id;
+  }
 
   /// Vincula um produtor (users/{uid}) a uma propriedade
   /// (properties/{propertyId}), gravando os dois lados da relação numa

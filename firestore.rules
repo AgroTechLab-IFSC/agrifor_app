@@ -37,14 +37,45 @@ service cloud.firestore {
 
     match /properties/{propertyId} {
       allow read: if true;
+
+      // cadastro pelo admin (PropertiesScreen) — nasce sempre approved
       allow create: if isAdmin();
+
+      // autocadastro do produtor (MyPropertyScreen /
+      // ProducerService.createPropertyForProducer) — nasce sempre
+      // pending, com ele mesmo como único dono, e só se ele ainda não
+      // tiver propriedade vinculada.
+      allow create: if isSignedIn()
+        && currentUserData().role == 'producer'
+        && currentUserData().propertyId == null
+        && request.resource.data.status == 'pending'
+        && request.resource.data.ownerIds == [request.auth.uid];
+
+      // update do admin é livre (inclui aprovar/rejeitar/marcar como
+      // pendente, que só mudam 'status'). Update do produtor-dono fica
+      // restrito a esta whitelist — SEM 'status' é o que impede ele de
+      // se auto-aprovar mesmo tentando direto na API, não só pela UI.
       allow update: if isAdmin() || (
         isOwner(propertyId) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'summary', 'productionSystem', 'association', 'salesChannels',
-          'salesNotes', 'whatsapp', 'email', 'images', 'updatedAt'
+          'propertyName', 'categoryIds', 'productIds', 'summary',
+          'productionSystem', 'salesChannels', 'salesNotes', 'whatsapp',
+          'location', 'images', 'updatedAt'
         ])
       );
+
+      // "Reenviar para aprovação": o dono devolve uma propriedade
+      // rejeitada pra fila de análise (PropertyRepository.setPending,
+      // chamado por MyPropertyScreen). Só libera essa direção exata
+      // (rejected -> pending) e só grava status/updatedAt — não dá
+      // pra aproveitar essa brecha pra mudar mais nada nem pra sair
+      // de outro status (ex.: approved -> pending, que é ação
+      // exclusiva do admin).
+      allow update: if isOwner(propertyId)
+        && resource.data.status == 'rejected'
+        && request.resource.data.status == 'pending'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']);
+
       allow delete: if isAdmin();
     }
 
@@ -64,10 +95,19 @@ service cloud.firestore {
         && request.resource.data.name.size() > 0
         && request.resource.data.keys().hasOnly(['email', 'role', 'propertyId', 'name', 'createdAt']);
 
-      // produtor nunca edita o próprio doc depois de criado (role e
-      // propertyId só mudam via Cloud Function, que usa Admin SDK e
-      // ignora rules de qualquer forma — isso aqui bloqueia só o client).
-      allow update: if isAdmin();
+      // update: admin livre, OU o próprio produtor gravando o PRÓPRIO
+      // propertyId — mas só de null pra um valor (primeiro vínculo,
+      // exatamente o que createPropertyForProducer faz) e só esse
+      // campo. Desvincular/trocar de propriedade continua sendo ação
+      // exclusiva do admin (ProducerService.unlinkProducerFromProperty
+      // só é chamado a partir de telas de admin).
+      allow update: if isAdmin() || (
+        isSignedIn()
+        && request.auth.uid == uid
+        && resource.data.propertyId == null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['propertyId'])
+        && request.resource.data.propertyId is string
+      );
 
       allow delete: if isAdmin();
     }
