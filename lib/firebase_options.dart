@@ -74,4 +74,5 @@ class DefaultFirebaseOptions {
     iosClientId: '634586034329-bngtku0nhg5m3vtv9p2o450miub4sekk.apps.googleusercontent.com',
     iosBundleId: 'br.edu.ifsc.lages.agrotechlab.agriforApp',
   );
+
 }

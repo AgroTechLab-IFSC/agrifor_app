@@ -24,7 +24,10 @@ void _downloadMapInBackground() async {
     final stats = await store.stats.all; // confirmar nome do método na sua versão do FMTC
     if (stats.length > 0) return; // já tem cache, não baixa de novo
 
-    final download = downloadLagesRegion();
+    // ALTERADO: downloadLagesRegion() -> downloadPropertiesRegion().
+    // Agora é async porque busca as propriedades no Firestore antes
+    // de calcular a área e começar o download.
+    final download = await downloadPropertiesRegion();
     download.downloadProgress.listen(
       (progress) {
         debugPrint('Baixando mapa offline: ${progress.percentageProgress.toStringAsFixed(0)}%');

@@ -1,0 +1,59 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userData() {
+      return firestore.get(
+        /databases/(default)/documents/users/$(request.auth.uid)
+      ).data;
+    }
+
+    function propertyData(propertyId) {
+      return firestore.get(
+        /databases/(default)/documents/properties/$(propertyId)
+      ).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && userData().role == 'admin';
+    }
+
+    function isOwner(propertyId) {
+      return isSignedIn()
+        && request.auth.uid in propertyData(propertyId).ownerIds;
+    }
+
+    function canManage(propertyId) {
+      return isAdmin() || isOwner(propertyId);
+    }
+
+    function validImage() {
+      return request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /properties/{propertyId}/{allPaths=**} {
+
+      // Imagens das propriedades podem ser exibidas no app.
+      allow read: if true;
+
+      // Admin ou produtor dono da propriedade.
+      allow create, update: if canManage(propertyId)
+        && validImage();
+
+      // Admin ou produtor dono da propriedade.
+      allow delete: if canManage(propertyId);
+    }
+
+    // Qualquer outro local do Storage permanece bloqueado.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

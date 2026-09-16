@@ -17,6 +17,7 @@ import 'package:agrifor_app/repositories/property_detail_resolver.dart';
 import 'package:agrifor_app/repositories/user_repository.dart';
 import 'package:agrifor_app/services/auth_service.dart';
 import 'package:agrifor_app/services/producer_service.dart';
+import 'package:agrifor_app/services/property_image_service.dart';
 import 'package:agrifor_app/screens/admin/widgets/property_form_sheet.dart';
 
 import 'property_detail_screen.dart';
@@ -48,6 +49,7 @@ class PropertiesScreen extends StatefulWidget {
     PropertyRepository? propertyRepository,
     UserRepository? userRepository,
     ProducerService? producerService,
+    PropertyImageService? propertyImageService,
     AuthService? authService,
   }) : _firestore = firestore ?? FirebaseFirestore.instance,
        _categoryRepository =
@@ -68,6 +70,7 @@ class PropertiesScreen extends StatefulWidget {
        _producerService =
            producerService ??
            ProducerService(firestore ?? FirebaseFirestore.instance),
+       _propertyImageService = propertyImageService ?? PropertyImageService(),
        _authService = authService ?? AuthService();
 
   // Guardado só pra permitir criar os repositórios default acima; não
@@ -81,6 +84,7 @@ class PropertiesScreen extends StatefulWidget {
   final PropertyRepository _propertyRepository;
   final UserRepository _userRepository;
   final ProducerService _producerService;
+  final PropertyImageService _propertyImageService;
   final AuthService _authService;
 
   @override
@@ -359,6 +363,7 @@ class _PropertiesScreenState extends State<PropertiesScreen> {
                     productionSystems: systemSnap.data ?? const [],
                     availableProducers: availableProducers,
                     producerService: widget._producerService,
+                    imageService: widget._propertyImageService,
                     onSave: property == null
                         ? (p) => widget._propertyRepository.create(p)
                         : (p) async {
@@ -488,6 +493,13 @@ class _PropertiesScreenState extends State<PropertiesScreen> {
         );
       }
       await widget._propertyRepository.delete(property.id);
+
+      // Melhor esforço: limpa as fotos da propriedade no Storage
+      // depois que o documento já foi apagado. Não bloqueia nem falha
+      // a exclusão se der erro aqui (ver PropertyImageService.
+      // deleteFolder, que já é silenciosa por dentro) — a propriedade
+      // em si já foi excluída com sucesso nesse ponto.
+      unawaited(widget._propertyImageService.deleteFolder(property.id));
 
       if (!mounted) return;
       Navigator.of(context).pop(); // fecha o loading
@@ -879,14 +891,42 @@ class _PropertyResultTile extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Placeholder pra imagem da propriedade — sem imagem
-            // programada ainda, só o quadradinho reservando o lugar.
-            Container(
-              width: 88,
-              height: 88,
-              decoration: BoxDecoration(
-                color: const Color(0xFFE8F5E9),
-                borderRadius: BorderRadius.circular(12),
+            // Thumbnail da propriedade — primeira imagem de
+            // property.images é sempre a capa (ver PropertyModel.
+            // images). Sem nenhuma foto cadastrada, cai no quadradinho
+            // de placeholder de sempre.
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: SizedBox(
+                width: 88,
+                height: 88,
+                child: property.images.isEmpty
+                    ? Container(color: const Color(0xFFE8F5E9))
+                    : Image.network(
+                        property.images.first,
+                        fit: BoxFit.cover,
+                        loadingBuilder: (context, child, progress) {
+                          if (progress == null) return child;
+                          return Container(
+                            color: const Color(0xFFE8F5E9),
+                            alignment: Alignment.center,
+                            child: const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          );
+                        },
+                        errorBuilder: (context, error, stack) => Container(
+                          color: const Color(0xFFE8F5E9),
+                          alignment: Alignment.center,
+                          child: const Icon(
+                            Icons.image_not_supported_outlined,
+                            color: Color(0xFF2E7D32),
+                            size: 20,
+                          ),
+                        ),
+                      ),
               ),
             ),
             const SizedBox(width: 14),

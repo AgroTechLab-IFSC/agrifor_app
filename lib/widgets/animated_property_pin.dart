@@ -108,30 +108,32 @@ class _AnimatedPropertyPinState extends State<AnimatedPropertyPin>
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: widget.onTap,
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedBuilder(
-        animation: Listenable.merge(
-            [_entranceController, _pulseController, _selectController]),
-        builder: (context, _) {
-          final combinedScale =
-              _entranceScale.value * _pulseScale.value * (1 + (_selectScale.value - 1) * 0.35 + (widget.selected ? 0 : 0));
-          return Opacity(
-            opacity: _entranceOpacity.value,
-            child: Transform.scale(
-              scale: combinedScale,
-              // REMOVIDO: Column com a etiqueta do nome (AnimatedContainer + Text)
-              // e o SizedBox de espaçamento — agora o pin é só o ícone.
-              child: SizedBox(
-                width: 92, // ALTERADO: era 80
-                height: 92, // ALTERADO: era 80
-                child: Stack(
-                  alignment: Alignment.center,
-                  clipBehavior: Clip.none,
-                  children: [
-                    if (widget.selected)
-                      Opacity(
+    return AnimatedBuilder(
+      animation: Listenable.merge(
+          [_entranceController, _pulseController, _selectController]),
+      builder: (context, _) {
+        final combinedScale =
+            _entranceScale.value * _pulseScale.value * (1 + (_selectScale.value - 1) * 0.35 + (widget.selected ? 0 : 0));
+        return Opacity(
+          opacity: _entranceOpacity.value,
+          child: Transform.scale(
+            scale: combinedScale,
+            // REMOVIDO: Column com a etiqueta do nome (AnimatedContainer + Text)
+            // e o SizedBox de espaçamento — agora o pin é só o ícone.
+            child: SizedBox(
+              width: 92, // ALTERADO: era 80
+              height: 92, // ALTERADO: era 80
+              child: Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [
+                  if (widget.selected)
+                    // IgnorePointer: o anel é só um efeito visual de halo
+                    // (cresce até 2x o tamanho do pin ao selecionar) — sem
+                    // isso, ele viraria uma área de toque enorme por cima
+                    // dos pins vizinhos enquanto anima.
+                    IgnorePointer(
+                      child: Opacity(
                         opacity: _ringOpacity.value,
                         child: Transform.scale(
                           scale: _ringScale.value,
@@ -145,7 +147,16 @@ class _AnimatedPropertyPinState extends State<AnimatedPropertyPin>
                           ),
                         ),
                       ),
-                    Icon(
+                    ),
+                  // GestureDetector movido pra cá, envolvendo só o ícone —
+                  // a SizedBox/Stack de 92x92 continua existindo apenas
+                  // como área de layout para as animações (pulso, entrada,
+                  // anel), mas não intercepta mais toque na área vazia ao
+                  // redor do desenho.
+                  GestureDetector(
+                    onTap: widget.onTap,
+                    behavior: HitTestBehavior.opaque,
+                    child: Icon(
                       Icons.location_on,
                       color: widget.selected
                           ? const Color(0xFFFFA000)
@@ -155,13 +166,13 @@ class _AnimatedPropertyPinState extends State<AnimatedPropertyPin>
                         Shadow(color: Colors.black38, blurRadius: 4, offset: Offset(0, 2)),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 }

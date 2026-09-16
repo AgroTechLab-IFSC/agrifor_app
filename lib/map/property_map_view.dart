@@ -13,18 +13,13 @@ import '../../repositories/category_repository.dart';
 import '../../repositories/product_repository.dart';
 import '../../repositories/production_system_repository.dart';
 import '../../repositories/property_detail_resolver.dart';
+import '../../utils/map_bounds.dart';
 import '../screens/property/property_detail_screen.dart';
 import '../widgets/animated_property_pin.dart';
 import '../widgets/map_filter_bar.dart';
 import '../widgets/property_detail_card.dart';
 
 const String kLagesTileStore = 'lagesStore';
-const LatLng kLagesCenter = LatLng(-27.765, -50.163);
-final LatLngBounds kLagesBounds = LatLngBounds(
-  const LatLng(-27.95, -50.42),
-  const LatLng(-27.59, -49.95),
-);
-const double kMapMinZoom = 11;
 
 class PropertyMapView extends StatefulWidget {
   const PropertyMapView({super.key, required this.properties});
@@ -43,6 +38,14 @@ class _PropertyMapViewState extends State<PropertyMapView>
   final Set<String> _activeFilters = {MapFilterBar.allFilterId};
   PropertyModel? _selectedProperty;
   final MapController _mapController = MapController();
+
+  // As propriedades chegam de forma assíncrona (Firestore) DEPOIS do
+  // primeiro build — nesse ponto o mapa já está pronto (onMapReady já
+  // rodou), mas _mappableProperties ainda estava vazia. Precisamos
+  // reenquadrar assim que os pins chegarem pela primeira vez, sem
+  // ficar reenquadrando de novo a cada atualização subsequente (senão
+  // atrapalha o usuário que já deu zoom/pan manualmente).
+  bool _didInitialFit = false;
 
   final CategoryRepository _categoryRepository = CategoryRepository(
     FirebaseFirestore.instance,
@@ -111,10 +114,32 @@ class _PropertyMapViewState extends State<PropertyMapView>
         !widget.properties.any((p) => p.id == _selectedProperty!.id)) {
       _closeCard();
     }
+
+    // Primeira vez que os pins chegam (ex: Firestore respondeu depois
+    // do build inicial) -> reenquadra automaticamente uma única vez.
+    // Depois disso, deixamos o usuário controlar o zoom/pan livremente.
+    if (!_didInitialFit && _mappableProperties.isNotEmpty) {
+      _didInitialFit = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _fitToMarkers();
+      });
+    }
   }
 
   List<PropertyModel> get _mappableProperties =>
       widget.properties.where((p) => p.location != null).toList();
+
+  // Baseado em TODAS as propriedades com localização (não só as que
+  // passam pelo filtro de categoria ativo) — o limite de pan do mapa
+  // não deve encolher/crescer conforme o usuário troca de filtro, só
+  // conforme o cadastro de propriedades muda de verdade.
+  LatLngBounds get _propertiesBounds => boundsFromPointsWithMargin(
+        _mappableProperties
+            .map((p) => LatLng(p.location!.latitude, p.location!.longitude))
+            .toList(),
+        marginKm: kMapBoundsMarginKm,
+        fallback: kFallbackMapBounds,
+      );
 
   List<PropertyModel> get _filteredProperties {
     final base = _mappableProperties;
@@ -139,7 +164,7 @@ class _PropertyMapViewState extends State<PropertyMapView>
     if (points.isEmpty) return;
 
     if (points.length == 1) {
-      _mapController.move(points.first, 15);
+      _mapController.move(points.first, 14);
       return;
     }
 
@@ -147,8 +172,8 @@ class _PropertyMapViewState extends State<PropertyMapView>
     _mapController.fitCamera(
       CameraFit.bounds(
         bounds: bounds,
-        padding: const EdgeInsets.fromLTRB(40, 100, 40, 40),
-        maxZoom: 15,
+        padding: const EdgeInsets.fromLTRB(60, 140, 60, 90),
+        maxZoom: 14,
       ),
     );
   }
@@ -237,12 +262,21 @@ class _PropertyMapViewState extends State<PropertyMapView>
         FlutterMap(
           mapController: _mapController,
           options: MapOptions(
-            initialCenter: kLagesCenter,
+            initialCenter: _propertiesBounds.center,
             initialZoom: 13,
             minZoom: kMapMinZoom,
-            maxZoom: 16,
-            cameraConstraint: CameraConstraint.contain(bounds: kLagesBounds),
+            maxZoom: kMapMaxZoom,
+            // containCenter (em vez de contain) restringe só o CENTRO da
+            // câmera aos bounds das propriedades — não a viewport inteira.
+            // Com `contain`, o mapa era fisicamente impedido de dar
+            // zoom-out além da margem cadastrada, o que competia com o
+            // fitCamera (padding da barra de filtro + card) e impedia
+            // caber todas as propriedades na tela no filtro "Todos".
+            cameraConstraint: CameraConstraint.containCenter(
+              bounds: _propertiesBounds,
+            ),
             onMapReady: () {
+              if (_mappableProperties.isNotEmpty) _didInitialFit = true;
               _fitToMarkers();
               // Garante um segundo ajuste já com o layout 100% assentado —
               // o primeiro (onMapReady) pode disparar antes do frame
@@ -268,7 +302,7 @@ class _PropertyMapViewState extends State<PropertyMapView>
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.agrifor.app',
               minZoom: kMapMinZoom,
-              maxZoom: 16,
+              maxZoom: kMapMaxZoom,
             ),
             MarkerLayer(
               markers: List.generate(filtered.length, (index) {
